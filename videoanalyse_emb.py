@@ -27,6 +27,26 @@ import subprocess
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings("ignore", category=urllib3.exceptions.NotOpenSSLWarning)
 
+
+def _load_dotenv():
+    """Load .env file from the script directory if it exists."""
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if not os.path.exists(env_path):
+        return
+    with open(env_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:  # don't overwrite existing env vars
+                os.environ[key] = value
+
+
+_load_dotenv()
+
 http = requests.Session()
 http.verify = False
 
@@ -574,9 +594,9 @@ def parse_args():
     parser.add_argument("--frame-interval", type=int, default=10, help="Frame-Abstand in Sekunden")
     parser.add_argument("--max-vision-frames", type=int, default=20, help="Maximal zu analysierende Frames pro Video")
 
-    parser.add_argument("--use-vision", action="store_true", help="Ollama Vision aktivieren")
-    parser.add_argument("--write-nfo", action="store_true", help="NFO schreiben")
-    parser.add_argument("--update-emby", action="store_true", help="Emby Bibliothek aktualisieren")
+    parser.add_argument("--use-vision", action="store_true", default=os.getenv("USE_VISION", "").lower() in ("1", "true", "yes"), help="Ollama Vision aktivieren")
+    parser.add_argument("--write-nfo", action="store_true", default=os.getenv("WRITE_NFO", "").lower() in ("1", "true", "yes"), help="NFO schreiben")
+    parser.add_argument("--update-emby", action="store_true", default=os.getenv("UPDATE_EMBY", "").lower() in ("1", "true", "yes"), help="Emby Bibliothek aktualisieren")
 
     parser.add_argument("--ollama-url", default=os.getenv("OLLAMA_URL", "http://127.0.0.1:11434"), help="Ollama Basis-URL")
     parser.add_argument("--emby-url", default=os.getenv("EMBY_URL", ""), help="Emby Basis-URL")
