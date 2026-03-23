@@ -16,6 +16,7 @@ from datetime import datetime
 SCRIPT_DIR = Path(__file__).parent.absolute()
 SCRIPT_PATH = SCRIPT_DIR / "videoanalyse_emb.py"
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".m4v", ".wmv", ".flv", ".webm"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".tif", ".webp", ".heic", ".heif"}
 
 
 def _scan_video_files(folder: str, recursive: bool = True):
@@ -28,6 +29,17 @@ def _scan_video_files(folder: str, recursive: bool = True):
     else:
         files = [p for p in root.iterdir() if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS]
 
+    return sorted(files, key=lambda p: str(p).lower())
+
+
+def _scan_photo_files(folder: str, recursive: bool = True):
+    root = Path(folder)
+    if not root.exists() or not root.is_dir():
+        return []
+    if recursive:
+        files = [p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS]
+    else:
+        files = [p for p in root.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS]
     return sorted(files, key=lambda p: str(p).lower())
 
 
@@ -50,6 +62,14 @@ def _guess_title_year(file_path: Path):
 
 def _post_movie(moviedb_url: str, api_key: str, payload: dict):
     url = moviedb_url.rstrip("/") + "/movie"
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return requests.post(url, headers=headers, json=payload, timeout=20)
+
+
+def _post_photo(moviedb_url: str, api_key: str, payload: dict):
+    url = moviedb_url.rstrip("/") + "/photos"
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -117,6 +137,12 @@ if "import_preview_rows" not in st.session_state:
     st.session_state.import_preview_rows = []
 if "import_last_results" not in st.session_state:
     st.session_state.import_last_results = []
+if "import_photo_candidates" not in st.session_state:
+    st.session_state.import_photo_candidates = []
+if "import_photo_preview_rows" not in st.session_state:
+    st.session_state.import_photo_preview_rows = []
+if "import_photo_last_results" not in st.session_state:
+    st.session_state.import_photo_last_results = []
 
 # Sidebar configuration
 with st.sidebar:
@@ -499,8 +525,122 @@ with tab_import:
                     st.text_area("Fehlerdetails", "\n".join(error_messages), height=120)
 
     if st.session_state.import_last_results:
-        st.markdown("### 📄 Letzter Import-Report")
+        st.markdown("### 📄 Letzter Import-Report (Videos)")
         st.dataframe(st.session_state.import_last_results, use_container_width=True, hide_index=True)
+
+    # ── Foto-Import ───────────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("### 📷 Fotos importieren")
+    st.caption("Bilddateien aus einem Verzeichnis scannen und in MoviemetaDb importieren")
+
+    photo_scan_col1, photo_scan_col2 = st.columns([3, 1])
+    with photo_scan_col1:
+        photo_scan_dir = st.text_input(
+            "Verzeichnis (Fotos)",
+            placeholder="/pfad/zum/foto-ordner",
+            key="photo_scan_dir_input",
+        )
+    with photo_scan_col2:
+        photo_recursive = st.checkbox("Rekursiv", value=True, key="photo_scan_recursive")
+
+    if st.button("🔎 Fotos scannen", key="photo_scan_btn"):
+        if not photo_scan_dir.strip():
+            st.error("Bitte ein Verzeichnis angeben.")
+        else:
+            photos = _scan_photo_files(photo_scan_dir.strip(), recursive=photo_recursive)
+            photo_candidates = []
+            for p in photos:
+                album = p.parent.name
+                photo_candidates.append({"path": str(p), "album": album})
+            st.session_state.import_photo_candidates = photo_candidates
+            st.session_state.import_photo_preview_rows = [
+                {
+                    "import": True,
+                    "file_path": c["path"],
+                    "album": c["album"],
+                    "description": "",
+                    "tags": "",
+                    "camera": "",
+                    "taken_at": "",
+                }
+                for c in photo_candidates
+            ]
+            st.success(f"{len(photo_candidates)} Bilddatei(en) gefunden.")
+
+    photo_candidates = st.session_state.import_photo_candidates
+    if photo_candidates:
+        st.markdown("#### 📥 Gefundene Fotos (anpassbar)")
+        st.caption("Album, Beschreibung, Tags und Kamera können vor dem Import angepasst werden.")
+
+        edited_photos = st.data_editor(
+            st.session_state.import_photo_preview_rows,
+            num_rows="fixed",
+            use_container_width=True,
+            hide_index=True,
+            key="photo_preview_editor",
+            column_config={
+                "import": st.column_config.CheckboxColumn("Import"),
+                "file_path": st.column_config.TextColumn("Dateipfad", disabled=True),
+                "album": st.column_config.TextColumn("Album"),
+                "description": st.column_config.TextColumn("Beschreibung"),
+                "tags": st.column_config.TextColumn("Tags (kommagetrennt)"),
+                "camera": st.column_config.TextColumn("Kamera"),
+                "taken_at": st.column_config.TextColumn("Aufnahmedatum"),
+            },
+        )
+
+        selected_photos = [r for r in edited_photos if r.get("import")]
+        st.caption(f"Ausgewählt für Import: {len(selected_photos)} von {len(edited_photos)}")
+
+        if st.button("⬆️ Fotos importieren", key="photo_bulk_import_btn"):
+            if not selected_photos:
+                st.warning("Keine Fotos ausgewählt.")
+            else:
+                ok_count = 0
+                err_count = 0
+                progress = st.progress(0.0)
+                photo_results = []
+
+                for idx, row in enumerate(selected_photos, start=1):
+                    payload = {
+                        "file_path": str(row.get("file_path", "")).strip(),
+                        "album": str(row.get("album", "")).strip(),
+                        "description": str(row.get("description", "")).strip(),
+                        "tags": str(row.get("tags", "")).strip(),
+                        "camera": str(row.get("camera", "")).strip(),
+                        "taken_at": str(row.get("taken_at", "")).strip(),
+                    }
+
+                    if not payload["file_path"]:
+                        err_count += 1
+                        photo_results.append({"file_path": "", "status": "error", "detail": "Pfad fehlt"})
+                        progress.progress(idx / len(selected_photos))
+                        continue
+
+                    try:
+                        resp = _post_photo(moviedb_url, moviedb_key, payload)
+                        if resp.status_code in (200, 201):
+                            ok_count += 1
+                            photo_results.append({"file_path": payload["file_path"], "status": "ok", "detail": "importiert"})
+                        else:
+                            err_count += 1
+                            photo_results.append({"file_path": payload["file_path"], "status": "error", "detail": f"API {resp.status_code}: {resp.text[:180]}"})
+                    except Exception as exc:
+                        err_count += 1
+                        photo_results.append({"file_path": payload["file_path"], "status": "error", "detail": str(exc)})
+
+                    progress.progress(idx / len(selected_photos))
+
+                st.session_state.import_photo_last_results = photo_results
+
+                if ok_count:
+                    st.success(f"✅ {ok_count} Foto(s) importiert.")
+                if err_count:
+                    st.error(f"❌ {err_count} Foto(s) fehlgeschlagen.")
+
+    if st.session_state.import_photo_last_results:
+        st.markdown("#### 📄 Letzter Foto-Import-Report")
+        st.dataframe(st.session_state.import_photo_last_results, use_container_width=True, hide_index=True)
 
 # Footer
 st.divider()
