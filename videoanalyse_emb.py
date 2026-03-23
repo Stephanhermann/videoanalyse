@@ -1,5 +1,6 @@
 #!/Users/stephanhermann/videoanalyse_venv/bin/python3
 import os
+import re
 import sys
 import cv2
 import json
@@ -489,6 +490,67 @@ def save_summary(output_dir: str, summary: dict):
     log(f"Summary geschrieben: {summary_path}")
 
 
+def push_to_moviemetadb(summary: dict, args) -> None:
+    """Analyseergebnisse an MoviemetaDb API senden, falls konfiguriert."""
+    moviemetadb_url = os.getenv("MOVIEMETADB_URL", "").rstrip("/")
+    if not moviemetadb_url:
+        return
+
+    api_key = os.getenv("MOVIEMETADB_API_KEY", "")
+    video_info = summary.get("video_info", {})
+    whisper = summary.get("whisper", {})
+    moviepy_info = summary.get("moviepy_info", {})
+
+    # Titel und Jahr aus Dateiname extrahieren
+    input_video = summary.get("input_video", "")
+    base_name = os.path.splitext(os.path.basename(input_video))[0]
+    title = base_name
+    year = 0
+    year_match = re.search(r'\b(19|20)\d{2}\b', base_name)
+    if year_match:
+        year = int(year_match.group())
+        title = re.sub(r'[\._\-\s]+$', '', base_name[:year_match.start()]).strip()
+
+    # Vision-Zusammenfassung (erste 5 Frames)
+    vision_summary = ""
+    if "vision_analysis" in summary:
+        frames_data = summary["vision_analysis"].get("frames", [])
+        snippets = [f.get("response", "") for f in frames_data if f.get("response")]
+        vision_summary = "\n\n".join(snippets[:5])
+
+    transcript_text = whisper.get("text_preview", "")
+    payload = {
+        "title": title if title else base_name,
+        "year": year,
+        "rating": 0.0,
+        "file_path": input_video,
+        "duration_seconds": float(moviepy_info.get("duration") or video_info.get("duration_seconds") or 0),
+        "width": int(video_info.get("width") or 0),
+        "height": int(video_info.get("height") or 0),
+        "fps": float(video_info.get("fps") or 0),
+        "language": whisper.get("language", ""),
+        "transcript": transcript_text,
+        "plot": transcript_text[:500] if transcript_text else vision_summary[:500],
+        "preview_path": video_info.get("preview_frame_path", ""),
+        "vision_model": summary.get("vision_model", ""),
+        "whisper_model": summary.get("whisper_model", ""),
+        "analysed_at": summary.get("finished_at", ""),
+    }
+
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    try:
+        resp = http.post(f"{moviemetadb_url}/movies", json=payload, headers=headers, timeout=30)
+        if resp.ok:
+            log(f"MoviemetaDb: '{payload['title']}' gespeichert ({moviemetadb_url})")
+        else:
+            log(f"MoviemetaDb: Fehler {resp.status_code} – {resp.text[:200]}")
+    except Exception as exc:
+        log(f"MoviemetaDb: Verbindungsfehler – {exc}")
+
+
 def run_single_video(video_path: str, output_dir: str, args, current_video: int = 1, total_videos: int = 1):
     safe_mkdir(output_dir)
 
@@ -570,6 +632,9 @@ def run_single_video(video_path: str, output_dir: str, args, current_video: int 
         summary["status"] = "completed"
         save_summary(output_dir, summary)
 
+        if getattr(args, "use_moviemetadb", False):
+            push_to_moviemetadb(summary, args)
+
         emit_progress("done", 100, f"Analyse abgeschlossen: {base_name}", current_video, total_videos)
         log("Analyse abgeschlossen")
 
@@ -597,6 +662,7 @@ def parse_args():
     parser.add_argument("--use-vision", action="store_true", default=os.getenv("USE_VISION", "").lower() in ("1", "true", "yes"), help="Ollama Vision aktivieren")
     parser.add_argument("--write-nfo", action="store_true", default=os.getenv("WRITE_NFO", "").lower() in ("1", "true", "yes"), help="NFO schreiben")
     parser.add_argument("--update-emby", action="store_true", default=os.getenv("UPDATE_EMBY", "").lower() in ("1", "true", "yes"), help="Emby Bibliothek aktualisieren")
+    parser.add_argument("--use-moviemetadb", action="store_true", default=os.getenv("USE_MOVIEMETADB", "").lower() in ("1", "true", "yes"), help="Ergebnisse an MoviemetaDb API senden")
 
     parser.add_argument("--ollama-url", default=os.getenv("OLLAMA_URL", "http://127.0.0.1:11434"), help="Ollama Basis-URL")
     parser.add_argument("--emby-url", default=os.getenv("EMBY_URL", ""), help="Emby Basis-URL")
