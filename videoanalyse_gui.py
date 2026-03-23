@@ -12,6 +12,7 @@ import time
 import requests
 from pathlib import Path
 from datetime import datetime
+import xml.etree.ElementTree as ET
 
 SCRIPT_DIR = Path(__file__).parent.absolute()
 SCRIPT_PATH = SCRIPT_DIR / "videoanalyse_emb.py"
@@ -58,6 +59,51 @@ def _guess_title_year(file_path: Path):
         title = name
 
     return title, year
+
+
+def _find_emb_nfo(video_path: Path):
+    candidates = [
+        video_path.with_suffix(".nfo"),
+        video_path.parent / "output" / video_path.stem / f"{video_path.stem}.nfo",
+    ]
+
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
+def _read_emb_nfo(video_path: Path):
+    nfo_path = _find_emb_nfo(video_path)
+    if not nfo_path:
+        return {}
+
+    try:
+        root = ET.parse(nfo_path).getroot()
+    except Exception:
+        return {}
+
+    title = (root.findtext("title") or "").strip()
+    plot = (root.findtext("plot") or "").strip()
+    premiered = (root.findtext("premiered") or "").strip()
+    runtime_text = (root.findtext("runtime") or "").strip()
+
+    year = 0
+    if len(premiered) >= 4 and premiered[:4].isdigit():
+        year = int(premiered[:4])
+
+    runtime_minutes = 0
+    if runtime_text.isdigit():
+        runtime_minutes = int(runtime_text)
+
+    return {
+        "title": title,
+        "plot": plot,
+        "year": year,
+        "premiered": premiered,
+        "runtime_minutes": runtime_minutes,
+        "nfo_path": str(nfo_path),
+    }
 
 
 def _post_movie(moviedb_url: str, api_key: str, payload: dict):
@@ -409,12 +455,22 @@ if current_page == "import":
         else:
             files = _scan_video_files(scan_dir.strip(), recursive=recursive_scan)
             candidates = []
+            nfo_found_count = 0
             for p in files:
-                title, year = _guess_title_year(p)
+                guessed_title, guessed_year = _guess_title_year(p)
+                nfo_data = _read_emb_nfo(p)
+                if nfo_data:
+                    nfo_found_count += 1
+
+                title = nfo_data.get("title") or guessed_title
+                year = int(nfo_data.get("year") or guessed_year or 0)
                 candidates.append({
                     "path": str(p),
                     "title": title,
                     "year": year,
+                    "plot": nfo_data.get("plot", ""),
+                    "runtime_minutes": int(nfo_data.get("runtime_minutes") or 0),
+                    "nfo_path": nfo_data.get("nfo_path", ""),
                 })
             st.session_state.import_candidates = candidates
             st.session_state.import_preview_rows = [
@@ -424,17 +480,19 @@ if current_page == "import":
                     "year": int(c["year"]),
                     "rating": 0.0,
                     "language": "",
-                    "plot": "",
+                    "plot": c.get("plot", ""),
+                    "runtime_minutes": int(c.get("runtime_minutes") or 0),
+                    "nfo_path": c.get("nfo_path", ""),
                     "path": c["path"],
                 }
                 for c in candidates
             ]
-            st.success(f"{len(candidates)} Videodatei(en) gefunden.")
+            st.success(f"{len(candidates)} Videodatei(en) gefunden. EMB-NFO erkannt: {nfo_found_count}")
 
     candidates = st.session_state.import_candidates
     if candidates:
         st.markdown("### 📥 Gefundene Dateien (anpassbar)")
-        st.caption("Du kannst Titel/Jahr/Rating/Sprache/Plot pro Eintrag vor dem Import ändern.")
+        st.caption("Du kannst Titel/Jahr/Rating/Sprache/Plot pro Eintrag vor dem Import ändern. Wenn vorhanden, werden EMB-NFO-Dateien automatisch ausgelesen.")
 
         imp_col1, imp_col2, imp_col3 = st.columns(3)
         with imp_col1:
@@ -467,6 +525,8 @@ if current_page == "import":
                 "rating": st.column_config.NumberColumn("Rating", min_value=0.0, max_value=10.0, step=0.1),
                 "language": st.column_config.TextColumn("Sprache"),
                 "plot": st.column_config.TextColumn("Plot"),
+                "runtime_minutes": st.column_config.NumberColumn("Laufzeit (Min)", min_value=0, step=1),
+                "nfo_path": st.column_config.TextColumn("NFO", disabled=True),
                 "path": st.column_config.TextColumn("Dateipfad", disabled=True),
             },
         )
@@ -490,6 +550,7 @@ if current_page == "import":
                         "year": int(row.get("year") or 0),
                         "rating": float(row.get("rating") or 0.0),
                         "file_path": str(row.get("path", "")).strip(),
+                        "duration_seconds": float(int(row.get("runtime_minutes") or 0) * 60),
                         "language": str(row.get("language", "")).strip(),
                         "plot": str(row.get("plot", "")).strip(),
                         "analysed_at": datetime.now().isoformat(),
