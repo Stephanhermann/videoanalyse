@@ -5,6 +5,9 @@ import streamlit as st
 import subprocess
 import os
 import json
+import psutil
+import GPUtil
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -22,6 +25,45 @@ st.set_page_config(
 # Title
 st.title("🎬 Videoanalyse EMB")
 st.markdown("Analyse von Videos mit OpenCV, Whisper & Ollama Vision")
+
+# Metrics overlay
+if "metrics_data" not in st.session_state:
+    st.session_state.metrics_data = {
+        "time": [],
+        "cpu": [],
+        "ram": [],
+        "gpu": []
+    }
+
+cpu_percent = psutil.cpu_percent(interval=None)
+ram_percent = psutil.virtual_memory().percent
+
+try:
+    gpus = GPUtil.getGPUs()
+    gpu_percent = gpus[0].load * 100 if gpus else 0.0
+except Exception:
+    gpu_percent = 0.0
+
+st.session_state.metrics_data["time"].append(datetime.now().strftime("%H:%M:%S"))
+st.session_state.metrics_data["cpu"].append(cpu_percent)
+st.session_state.metrics_data["ram"].append(ram_percent)
+st.session_state.metrics_data["gpu"].append(gpu_percent)
+
+if len(st.session_state.metrics_data["time"]) > 60:
+    for key in ["time", "cpu", "ram", "gpu"]:
+        st.session_state.metrics_data[key].pop(0)
+
+metrics_df = {
+    "CPU": st.session_state.metrics_data["cpu"],
+    "RAM": st.session_state.metrics_data["ram"],
+    "GPU": st.session_state.metrics_data["gpu"]
+}
+
+st.markdown("### 📈 Systemauslastung")
+st.write(
+    f"CPU: {cpu_percent:.1f}% | RAM: {ram_percent:.1f}% | GPU: {gpu_percent:.1f}%"
+)
+st.line_chart(metrics_df)
 
 # Initialize session state
 if "analysis_running" not in st.session_state:

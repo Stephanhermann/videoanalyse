@@ -1,0 +1,7 @@
+opencv-python
+moviepy
+requests
+whisper-openai
+streamlit
+psutil
+GPUtil
