@@ -1,0 +1,19 @@
+#!/bin/bash
+# Wrapper script to run videoanalyse_emb.py or videoanalyse_mac_gui.py with correct Python environment
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_ENV="$HOME/videoanalyse_venv/bin/python3"
+
+if [ ! -f "$PYTHON_ENV" ]; then
+    echo "Error: Virtual environment not found at $PYTHON_ENV"
+    echo "Please ensure videoanalyse_venv is properly set up."
+    exit 1
+fi
+
+# If no arguments or --gui flag, start GUI
+if [ $# -eq 0 ] || [ "$1" = "--gui" ]; then
+    exec "$PYTHON_ENV" "$SCRIPT_DIR/videoanalyse_mac_gui.py"
+else
+    # Otherwise pass all arguments to CLI
+    exec "$PYTHON_ENV" "$SCRIPT_DIR/videoanalyse_emb.py" "$@"
+fi

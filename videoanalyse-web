@@ -1,0 +1,13 @@
+#!/bin/bash
+# Wrapper to run Streamlit GUI for videoanalyse
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_ENV="$HOME/videoanalyse_venv/bin/python3"
+
+if [ ! -f "$PYTHON_ENV" ]; then
+    echo "Error: Virtual environment not found at $PYTHON_ENV"
+    exit 1
+fi
+
+# Start Streamlit with the GUI script
+exec "$PYTHON_ENV" -m streamlit run "$SCRIPT_DIR/videoanalyse_gui.py" "$@"

@@ -1,0 +1,135 @@
+#!/Users/stephanhermann/videoanalyse_venv/bin/python3
+"""Interactive CLI menu for videoanalyse_emb.py - no GUI dependencies"""
+
+import os
+import sys
+import subprocess
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def show_menu():
+    print("\n" + "="*60)
+    print("VIDEOANALYSE EMB - Interactive CLI Menu")
+    print("="*60)
+    print("\n1. Analyse einzelnes Video")
+    print("2. Analyse Ordner (Batch)")
+    print("3. Version anzeigen")
+    print("4. CLI-Hilfe")
+    print("5. Exit")
+    print("\n" + "-"*60)
+
+def get_input(prompt, default=None):
+    if default:
+        prompt = f"{prompt} [{default}]: "
+    else:
+        prompt = f"{prompt}: "
+    
+    value = input(prompt).strip()
+    
+    if default and not value:
+        return default
+    return value
+
+def analyze_single_video():
+    print("\n--- Einzelvideo-Analyse ---")
+    
+    video_path = get_input("Videodatei-Pfad")
+    if not os.path.exists(video_path):
+        print(f"❌ Datei nicht gefunden: {video_path}")
+        return
+    
+    output_dir = get_input("Ausgabeordner (optional)", "")
+    frame_interval = get_input("Frame-Intervall in Sekunden", "10")
+    max_frames = get_input("Max Vision Frames", "20")
+    
+    use_vision = input("Vision-Analyse aktivieren? (y/n) [y]: ").strip().lower() != "n"
+    write_nfo = input("NFO schreiben? (y/n) [y]: ").strip().lower() != "n"
+    
+    cmd = [
+        os.path.join(SCRIPT_DIR, "videoanalyse_emb.py"),
+        "--input", video_path,
+        "--frame-interval", frame_interval,
+        "--max-vision-frames", max_frames,
+    ]
+    
+    if output_dir:
+        cmd.extend(["--output", output_dir])
+    
+    if use_vision:
+        cmd.append("--use-vision")
+    
+    if write_nfo:
+        cmd.append("--write-nfo")
+    
+    print(f"\n▶ Starte Analyse...\n")
+    subprocess.run(cmd)
+
+def analyze_folder():
+    print("\n--- Ordner-Analyse (Batch) ---")
+    
+    folder_path = get_input("Ordner mit Videos")
+    if not os.path.isdir(folder_path):
+        print(f"❌ Ordner nicht gefunden: {folder_path}")
+        return
+    
+    output_dir = get_input("Ausgabeordner (optional)", "")
+    frame_interval = get_input("Frame-Intervall in Sekunden", "10")
+    max_frames = get_input("Max Vision Frames", "20")
+    
+    use_vision = input("Vision-Analyse aktivieren? (y/n) [y]: ").strip().lower() != "n"
+    write_nfo = input("NFO schreiben? (y/n) [y]: ").strip().lower() != "n"
+    
+    cmd = [
+        os.path.join(SCRIPT_DIR, "videoanalyse_emb.py"),
+        "--input-folder", folder_path,
+        "--frame-interval", frame_interval,
+        "--max-vision-frames", max_frames,
+    ]
+    
+    if output_dir:
+        cmd.extend(["--output", output_dir])
+    
+    if use_vision:
+        cmd.append("--use-vision")
+    
+    if write_nfo:
+        cmd.append("--write-nfo")
+    
+    print(f"\n▶ Starte Batch-Analyse...\n")
+    subprocess.run(cmd)
+
+def show_version():
+    subprocess.run([os.path.join(SCRIPT_DIR, "videoanalyse_emb.py"), "--version"])
+
+def show_help():
+    print("\n--- CLI-Hilfe ---")
+    subprocess.run([os.path.join(SCRIPT_DIR, "videoanalyse_emb.py"), "--help"])
+
+def main():
+    while True:
+        show_menu()
+        choice = input("Wähle Option (1-5): ").strip()
+        
+        if choice == "1":
+            analyze_single_video()
+        elif choice == "2":
+            analyze_folder()
+        elif choice == "3":
+            show_version()
+        elif choice == "4":
+            show_help()
+        elif choice == "5":
+            print("\n👋 Auf Wiedersehen!")
+            sys.exit(0)
+        else:
+            print("❌ Ungültige Option. Bitte wähle 1-5.")
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\n👋 Analyse unterbrochen.")
+        sys.exit(0)
+    except Exception as e:
+        print(f"\n❌ Fehler: {e}")
+        sys.exit(1)
