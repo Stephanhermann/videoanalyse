@@ -37,6 +37,10 @@ def analyze_single_video():
     if not os.path.exists(video_path):
         print(f"❌ Datei nicht gefunden: {video_path}")
         return
+    if not os.path.isfile(video_path):
+        print(f"❌ Pfad ist keine Datei: {video_path}")
+        print("💡 Tipp: Für Ordner nutze Option 2 (Batch-Analyse).")
+        return
     
     output_dir = get_input("Ausgabeordner (optional)", "")
     frame_interval = get_input("Frame-Intervall in Sekunden", "10")

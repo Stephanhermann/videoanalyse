@@ -7,6 +7,14 @@ import base64
 import argparse
 import traceback
 import requests
+import warnings
+
+# Suppress LibreSSL warning on macOS system Python/OpenSSL combinations.
+warnings.filterwarnings(
+    "ignore",
+    message=r"urllib3 v2 only supports OpenSSL 1\.1\.1\+.*",
+)
+
 import urllib3
 import whisper
 from functools import lru_cache
@@ -17,6 +25,7 @@ import subprocess
 
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+warnings.filterwarnings("ignore", category=urllib3.exceptions.NotOpenSSLWarning)
 
 http = requests.Session()
 http.verify = False
@@ -652,8 +661,49 @@ def main():
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Eingabedatei nicht gefunden: {video_path}")
 
-    output_dir = get_output_dir(video_path, args.output)
-    run_single_video(video_path, output_dir, args, current_video=1, total_videos=1)
+    # Handle user input where a folder is passed to --input by mistake.
+    if os.path.isdir(video_path):
+        detected_videos = find_video_files(video_path)
+        if not detected_videos:
+            raise RuntimeError(
+                f"Eingabepfad ist ein Ordner ohne Videodateien: {video_path}. "
+                "Nutze --input-folder für Ordner oder gib eine konkrete Videodatei mit --input an."
+            )
+
+        if len(detected_videos) == 1:
+            log(
+                f"Hinweis: Ordner bei --input erkannt. "
+                f"Verwende automatisch die einzige Videodatei: {detected_videos[0]}"
+            )
+            video_path = detected_videos[0]
+            output_dir = get_output_dir(video_path, args.output)
+            run_single_video(video_path, output_dir, args, current_video=1, total_videos=1)
+        else:
+            log(
+                f"Hinweis: Ordner bei --input erkannt mit {len(detected_videos)} Videodateien. "
+                "Starte automatisch Batch-Modus."
+            )
+            if args.output:
+                batch_output_root = os.path.abspath(args.output)
+            else:
+                batch_output_root = os.path.join(video_path, "output")
+
+            safe_mkdir(batch_output_root)
+
+            for idx, folder_video_path in enumerate(detected_videos, start=1):
+                base_name = get_video_basename(folder_video_path)
+                video_output_dir = os.path.join(batch_output_root, base_name)
+                safe_mkdir(video_output_dir)
+                run_single_video(
+                    folder_video_path,
+                    video_output_dir,
+                    args,
+                    current_video=idx,
+                    total_videos=len(detected_videos),
+                )
+    else:
+        output_dir = get_output_dir(video_path, args.output)
+        run_single_video(video_path, output_dir, args, current_video=1, total_videos=1)
 
     if args.update_emby:
         update_emby_library(args.emby_url, args.emby_api_key)
