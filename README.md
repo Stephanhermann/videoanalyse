@@ -7,6 +7,7 @@ Dieses Projekt implementiert eine Videoanalyse-Pipeline auf Python-Basis mit:
 - Ollama Vision-Analyse pro Frame
 - NFO-Erstellung
 - Emby Bibliotheks-Refresh
+- MoviemetaDb-Import (manuell und per Verzeichnis-Scan)
 
 ## Usability-Modi
 
@@ -16,6 +17,7 @@ Dieses Projekt implementiert eine Videoanalyse-Pipeline auf Python-Basis mit:
 - `videoanalyse-interactive`: Terminal-Menü (kein GUI)
 - `videoanalyse`: Wrapper (Wählt CLI/GUI)
 - `videoanalyse-web`: Startet Streamlit Web-GUI
+- `start-moviemetadb.sh`: Startet MoviemetaDb API lokal auf Port `8001`
 
 ## Installation (virtualenv)
 
@@ -42,6 +44,21 @@ cd ~/Downloads/output
 cd ~/Downloads/output
 ./videoanalyse-web
 ```
+
+### MoviemetaDb API starten
+
+```bash
+cd ~/Downloads/output
+./start-moviemetadb.sh
+```
+
+Danach ist die API unter `http://127.0.0.1:8001` erreichbar.
+
+### Import über GUI (Seite 2)
+
+- In der Streamlit GUI den Tab `🗂️ Import (Seite 2)` öffnen.
+- Entweder manuell Titel/Jahr usw. eintragen oder ein Verzeichnis scannen.
+- Vor dem Import können alle gefundenen Einträge in der Tabelle angepasst werden.
 
 ### Interaktives Terminal
 
@@ -70,3 +87,4 @@ git commit -m "Initial commit"
 
 - GUI via `videoanalyse_mac_gui.py` kann auf `macOS 16` scheitern wegen fehlendem `_tkinter`.
 - Streamlit ist plattformunabhängig und empfohlen.
+- Für den Import muss MoviemetaDb laufen und `MOVIEMETADB_URL` (Standard: `http://127.0.0.1:8001`) erreichbar sein.
