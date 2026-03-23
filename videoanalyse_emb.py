@@ -7,7 +7,6 @@ import json
 import base64
 import argparse
 import traceback
-import requests
 import warnings
 
 # Suppress LibreSSL warning on macOS system Python/OpenSSL combinations.
@@ -17,6 +16,7 @@ warnings.filterwarnings(
 )
 
 import urllib3
+import requests
 import whisper
 from functools import lru_cache
 from typing import Optional
@@ -318,6 +318,38 @@ def check_ollama_server(ollama_url: str):
 
     log(f"Ollama erreichbar. Modelle gefunden: {len(models)}")
     return models
+
+
+def normalize_model_name(model_name: str):
+    """Return normalized full and base model names for robust comparisons."""
+    norm = (model_name or "").strip().lower()
+    if not norm:
+        return "", ""
+    base = norm.split(":", 1)[0]
+    return norm, base
+
+
+def is_ollama_model_available(requested_model: str, available_models):
+    """Match models case-insensitively and independent of tag (e.g. :latest)."""
+    req_full, req_base = normalize_model_name(requested_model)
+    if not req_full:
+        return False
+
+    for model in available_models or []:
+        model_full, model_base = normalize_model_name(model)
+        if not model_full:
+            continue
+
+        if model_full == req_full:
+            return True
+        if model_base == req_base:
+            return True
+
+        # Common Ollama case: requested without tag, available with :latest.
+        if ":" not in req_full and model_full == f"{req_full}:latest":
+            return True
+
+    return False
 
 
 def image_to_base64(image_path: str) -> str:
@@ -702,8 +734,11 @@ def main():
 
     if args.use_vision:
         models = check_ollama_server(args.ollama_url)
-        if models and args.vision_model not in models:
+        if models and not is_ollama_model_available(args.vision_model, models):
             log(f"Hinweis: Modell '{args.vision_model}' ist nicht in ollama list gefunden worden.")
+            preview = ", ".join(models[:5])
+            if preview:
+                log(f"Verfügbare Modelle (Auszug): {preview}")
             log("Falls nötig: ollama pull " + args.vision_model)
 
     if args.input_folder:

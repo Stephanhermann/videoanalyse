@@ -5,14 +5,55 @@ import streamlit as st
 import subprocess
 import os
 import json
+import re
 import psutil
 import GPUtil
 import time
+import requests
 from pathlib import Path
 from datetime import datetime
 
 SCRIPT_DIR = Path(__file__).parent.absolute()
 SCRIPT_PATH = SCRIPT_DIR / "videoanalyse_emb.py"
+VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".m4v", ".wmv", ".flv", ".webm"}
+
+
+def _scan_video_files(folder: str, recursive: bool = True):
+    root = Path(folder)
+    if not root.exists() or not root.is_dir():
+        return []
+
+    if recursive:
+        files = [p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS]
+    else:
+        files = [p for p in root.iterdir() if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS]
+
+    return sorted(files, key=lambda p: str(p).lower())
+
+
+def _guess_title_year(file_path: Path):
+    name = file_path.stem
+    year = 0
+    title = name
+
+    match = re.search(r"\b(19|20)\d{2}\b", name)
+    if match:
+        year = int(match.group())
+        title = name[:match.start()]
+
+    title = re.sub(r"[._-]+", " ", title).strip()
+    if not title:
+        title = name
+
+    return title, year
+
+
+def _post_movie(moviedb_url: str, api_key: str, payload: dict):
+    url = moviedb_url.rstrip("/") + "/movie"
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return requests.post(url, headers=headers, json=payload, timeout=20)
 
 # Page config
 st.set_page_config(
@@ -70,6 +111,12 @@ if "analysis_running" not in st.session_state:
     st.session_state.analysis_running = False
 if "log_output" not in st.session_state:
     st.session_state.log_output = ""
+if "import_candidates" not in st.session_state:
+    st.session_state.import_candidates = []
+if "import_preview_rows" not in st.session_state:
+    st.session_state.import_preview_rows = []
+if "import_last_results" not in st.session_state:
+    st.session_state.import_last_results = []
 
 # Sidebar configuration
 with st.sidebar:
@@ -105,144 +152,355 @@ with st.sidebar:
         emby_url = ""
         emby_api_key = ""
 
-# Main content area
-col1, col2 = st.columns([2, 1])
+tab_analyse, tab_import = st.tabs(["📊 Analyse", "🗂️ Import (Seite 2)"])
 
-with col1:
-    st.subheader("📊 Analyse")
-    
-    if st.button("▶ Start Analyse", key="start_btn", use_container_width=True):
-        if not input_path:
-            st.error("❌ Bitte geben Sie einen Videodatei-Pfad oder Ordner an.")
-        elif not os.path.exists(input_path):
-            st.error(f"❌ Pfad nicht gefunden: {input_path}")
-        else:
-            st.session_state.analysis_running = True
-            st.session_state.log_output = ""
-            
-            # Build command
-            cmd = [
-                str(SCRIPT_PATH),
-                "--vision-model", vision_model,
-                "--whisper-model", whisper_model,
-                "--frame-interval", str(frame_interval),
-                "--max-vision-frames", str(max_vision_frames),
-                "--ollama-url", ollama_url,
-            ]
-            
-            if mode == "📹 Einzelvideo":
-                cmd.extend(["--input", input_path])
+with tab_analyse:
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        st.subheader("📊 Analyse")
+
+        if st.button("▶ Start Analyse", key="start_btn", use_container_width=True):
+            if not input_path:
+                st.error("❌ Bitte geben Sie einen Videodatei-Pfad oder Ordner an.")
+            elif not os.path.exists(input_path):
+                st.error(f"❌ Pfad nicht gefunden: {input_path}")
             else:
-                cmd.extend(["--input-folder", input_path])
-            
-            if output_path:
-                cmd.extend(["--output", output_path])
-            
-            if use_vision:
-                cmd.append("--use-vision")
-            
-            if write_nfo:
-                cmd.append("--write-nfo")
-            
-            if update_emby and emby_url and emby_api_key:
-                cmd.append("--update-emby")
-                cmd.extend(["--emby-url", emby_url])
-                cmd.extend(["--emby-api-key", emby_api_key])
-            
-            # Run analysis
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            log_area = st.empty()
-            
-            status_text.info("⏳ Analyse läuft...")
-            
-            try:
-                process = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1
-                )
-                
-                last_percent = 0
-                
-                for line in process.stdout:
-                    st.session_state.log_output += line
-                    
-                    # Parse progress JSON if available
-                    if line.strip().startswith('{"type": "progress"'):
-                        try:
-                            data = json.loads(line.strip())
-                            percent = data.get("percent", 0)
-                            message = data.get("message", "")
-                            
-                            if percent > last_percent:
-                                progress_bar.progress(min(100, percent / 100.0))
-                                last_percent = percent
-                            
-                            status_text.info(f"⏳ {message}")
-                        except json.JSONDecodeError:
-                            pass
-                    elif "abgeschlossen" in line.lower():
-                        progress_bar.progress(1.0)
-                        status_text.success("✅ Analyse abgeschlossen!")
-                    elif "fehler" in line.lower():
-                        status_text.warning(f"⚠️ {line.strip()}")
-                
-                process.wait()
-                
-                if process.returncode == 0:
-                    st.session_state.analysis_running = False
-                    status_text.success("✅ Erfolgreich abgeschlossen!")
-                    progress_bar.progress(1.0)
-                else:
-                    st.session_state.analysis_running = False
-                    status_text.error(f"❌ Fehler: Prozess endete mit Code {process.returncode}")
-                
-            except Exception as e:
-                st.session_state.analysis_running = False
-                status_text.error(f"❌ Fehler: {e}")
-    
-    # Log output
-    st.subheader("📋 Log")
-    log_display = st.empty()
-    
-    if st.session_state.log_output:
-        log_display.text_area(
-            "Analyse-Log",
-            value=st.session_state.log_output,
-            height=300,
-            disabled=True,
-            key="log_area"
-        )
-    else:
-        log_display.info("Kein Log verfügbar. Starten Sie eine Analyse.")
+                st.session_state.analysis_running = True
+                st.session_state.log_output = ""
 
-with col2:
-    st.subheader("ℹ️ Info")
-    
-    st.info(f"""
-    **Version:** 1.0.0
-    
-    **Script:** videoanalyse_emb.py
-    
-    **Pfad:** {SCRIPT_PATH}
-    """)
-    
-    st.subheader("🎨 Features")
-    st.markdown("""
-    - 🎥 Video-Analyse mit OpenCV
-    - 🎤 Audio-Transkription (Whisper)
-    - 👁️ Frame-Vision mit Ollama
-    - 📝 NFO-Datei-Export
-    - 🔄 Batch-Verarbeitung
-    - 📊 Live-Progress
-    """)
-    
-    st.subheader("🔗 Schnelllinks")
-    if st.button("🔄 Seite aktualisieren"):
-        st.rerun()
+                # Build command
+                cmd = [
+                    str(SCRIPT_PATH),
+                    "--vision-model", vision_model,
+                    "--whisper-model", whisper_model,
+                    "--frame-interval", str(frame_interval),
+                    "--max-vision-frames", str(max_vision_frames),
+                    "--ollama-url", ollama_url,
+                ]
+
+                if mode == "📹 Einzelvideo":
+                    cmd.extend(["--input", input_path])
+                else:
+                    cmd.extend(["--input-folder", input_path])
+
+                if output_path:
+                    cmd.extend(["--output", output_path])
+
+                if use_vision:
+                    cmd.append("--use-vision")
+
+                if write_nfo:
+                    cmd.append("--write-nfo")
+
+                if update_emby and emby_url and emby_api_key:
+                    cmd.append("--update-emby")
+                    cmd.extend(["--emby-url", emby_url])
+                    cmd.extend(["--emby-api-key", emby_api_key])
+
+                # Run analysis
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+
+                status_text.info("⏳ Analyse läuft...")
+
+                try:
+                    process = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1,
+                    )
+
+                    last_percent = 0
+
+                    for line in process.stdout:
+                        st.session_state.log_output += line
+
+                        # Parse progress JSON if available
+                        if line.strip().startswith('{"type": "progress"'):
+                            try:
+                                data = json.loads(line.strip())
+                                percent = data.get("percent", 0)
+                                message = data.get("message", "")
+
+                                if percent > last_percent:
+                                    progress_bar.progress(min(100, percent / 100.0))
+                                    last_percent = percent
+
+                                status_text.info(f"⏳ {message}")
+                            except json.JSONDecodeError:
+                                pass
+                        elif "abgeschlossen" in line.lower():
+                            progress_bar.progress(1.0)
+                            status_text.success("✅ Analyse abgeschlossen!")
+                        elif "fehler" in line.lower():
+                            status_text.warning(f"⚠️ {line.strip()}")
+
+                    process.wait()
+
+                    if process.returncode == 0:
+                        st.session_state.analysis_running = False
+                        status_text.success("✅ Erfolgreich abgeschlossen!")
+                        progress_bar.progress(1.0)
+                    else:
+                        st.session_state.analysis_running = False
+                        status_text.error(f"❌ Fehler: Prozess endete mit Code {process.returncode}")
+
+                except Exception as e:
+                    st.session_state.analysis_running = False
+                    status_text.error(f"❌ Fehler: {e}")
+
+        st.subheader("📋 Log")
+        log_display = st.empty()
+
+        if st.session_state.log_output:
+            log_display.text_area(
+                "Analyse-Log",
+                value=st.session_state.log_output,
+                height=300,
+                disabled=True,
+                key="log_area",
+            )
+        else:
+            log_display.info("Kein Log verfügbar. Starten Sie eine Analyse.")
+
+    with col2:
+        st.subheader("ℹ️ Info")
+
+        st.info(f"""
+        **Version:** 1.1.0
+
+        **Script:** videoanalyse_emb.py
+
+        **Pfad:** {SCRIPT_PATH}
+        """)
+
+        st.subheader("🎨 Features")
+        st.markdown("""
+        - 🎥 Video-Analyse mit OpenCV
+        - 🎤 Audio-Transkription (Whisper)
+        - 👁️ Frame-Vision mit Ollama
+        - 📝 NFO-Datei-Export
+        - 🔄 Batch-Verarbeitung
+        - 📊 Live-Progress
+        - 🗂️ MoviemetaDb Import (Seite 2)
+        """)
+
+        st.subheader("🔗 Schnelllinks")
+        if st.button("🔄 Seite aktualisieren"):
+            st.rerun()
+
+with tab_import:
+    st.subheader("🗂️ MoviemetaDb Import")
+    st.caption("Manuelle Eingabe oder Verzeichnis durchsuchen und importieren")
+
+    api_col1, api_col2 = st.columns([2, 1])
+    with api_col1:
+        moviedb_url = st.text_input(
+            "MoviemetaDb URL",
+            value=os.getenv("MOVIEMETADB_URL", "http://127.0.0.1:8001"),
+            key="moviedb_url_input",
+        )
+    with api_col2:
+        moviedb_key = st.text_input(
+            "API Key (optional)",
+            value=os.getenv("MOVIEMETADB_API_KEY", ""),
+            type="password",
+            key="moviedb_key_input",
+        )
+
+    st.markdown("### ✍️ Manuelle Eingabe")
+    man_col1, man_col2, man_col3 = st.columns(3)
+    with man_col1:
+        manual_title = st.text_input("Titel", key="manual_title")
+    with man_col2:
+        manual_year = st.number_input("Jahr", min_value=0, max_value=2100, value=0, step=1, key="manual_year")
+    with man_col3:
+        manual_rating = st.number_input("Rating", min_value=0.0, max_value=10.0, value=0.0, step=0.1, key="manual_rating")
+
+    manual_file_path = st.text_input("Dateipfad (optional)", key="manual_file_path")
+    manual_language = st.text_input("Sprache (optional)", value="", key="manual_language")
+    manual_plot = st.text_area("Plot / Beschreibung (optional)", key="manual_plot")
+
+    if st.button("➕ Manuell importieren", key="manual_import_btn"):
+        if not manual_title.strip():
+            st.error("Bitte einen Titel eingeben.")
+        else:
+            payload = {
+                "title": manual_title.strip(),
+                "year": int(manual_year),
+                "rating": float(manual_rating),
+                "file_path": manual_file_path.strip(),
+                "language": manual_language.strip(),
+                "plot": manual_plot.strip(),
+                "analysed_at": datetime.now().isoformat(),
+            }
+            try:
+                resp = _post_movie(moviedb_url, moviedb_key, payload)
+                if resp.status_code in (200, 201):
+                    st.success(f"✅ Importiert: {payload['title']} ({payload['year']})")
+                else:
+                    st.error(f"❌ API Fehler {resp.status_code}: {resp.text[:400]}")
+            except Exception as exc:
+                st.error(f"❌ Verbindungsfehler: {exc}")
+
+    st.markdown("### 📁 Verzeichnis durchsuchen")
+    scan_col1, scan_col2 = st.columns([3, 1])
+    with scan_col1:
+        scan_dir = st.text_input("Verzeichnis", placeholder="/pfad/zum/video-ordner", key="scan_dir_input")
+    with scan_col2:
+        recursive_scan = st.checkbox("Rekursiv", value=True, key="scan_recursive")
+
+    if st.button("🔎 Verzeichnis scannen", key="scan_btn"):
+        if not scan_dir.strip():
+            st.error("Bitte ein Verzeichnis angeben.")
+        else:
+            files = _scan_video_files(scan_dir.strip(), recursive=recursive_scan)
+            candidates = []
+            for p in files:
+                title, year = _guess_title_year(p)
+                candidates.append({
+                    "path": str(p),
+                    "title": title,
+                    "year": year,
+                })
+            st.session_state.import_candidates = candidates
+            st.session_state.import_preview_rows = [
+                {
+                    "import": True,
+                    "title": c["title"],
+                    "year": int(c["year"]),
+                    "rating": 0.0,
+                    "language": "",
+                    "plot": "",
+                    "path": c["path"],
+                }
+                for c in candidates
+            ]
+            st.success(f"{len(candidates)} Videodatei(en) gefunden.")
+
+    candidates = st.session_state.import_candidates
+    if candidates:
+        st.markdown("### 📥 Gefundene Dateien (anpassbar)")
+        st.caption("Du kannst Titel/Jahr/Rating/Sprache/Plot pro Eintrag vor dem Import ändern.")
+
+        imp_col1, imp_col2, imp_col3 = st.columns(3)
+        with imp_col1:
+            import_rating = st.number_input("Standard-Rating", min_value=0.0, max_value=10.0, value=0.0, step=0.1, key="import_rating")
+        with imp_col2:
+            import_language = st.text_input("Standard-Sprache", value="", key="import_language")
+        with imp_col3:
+            apply_defaults = st.button("🧩 Standardwerte auf alle anwenden", key="apply_defaults_btn")
+
+        if apply_defaults:
+            updated_rows = []
+            for row in st.session_state.import_preview_rows:
+                current = dict(row)
+                current["rating"] = float(import_rating)
+                current["language"] = import_language.strip()
+                updated_rows.append(current)
+            st.session_state.import_preview_rows = updated_rows
+            st.rerun()
+
+        edited_rows = st.data_editor(
+            st.session_state.import_preview_rows,
+            num_rows="fixed",
+            use_container_width=True,
+            hide_index=True,
+            key="import_preview_editor",
+            column_config={
+                "import": st.column_config.CheckboxColumn("Import"),
+                "title": st.column_config.TextColumn("Titel"),
+                "year": st.column_config.NumberColumn("Jahr", min_value=0, max_value=2100, step=1),
+                "rating": st.column_config.NumberColumn("Rating", min_value=0.0, max_value=10.0, step=0.1),
+                "language": st.column_config.TextColumn("Sprache"),
+                "plot": st.column_config.TextColumn("Plot"),
+                "path": st.column_config.TextColumn("Dateipfad", disabled=True),
+            },
+        )
+
+        selected_rows = [r for r in edited_rows if r.get("import")]
+        st.caption(f"Ausgewählt für Import: {len(selected_rows)} von {len(edited_rows)}")
+
+        if st.button("⬆️ Auswahl importieren", key="bulk_import_btn"):
+            if not selected_rows:
+                st.warning("Keine Dateien ausgewählt.")
+            else:
+                ok_count = 0
+                err_count = 0
+                progress = st.progress(0.0)
+                error_messages = []
+                result_rows = []
+
+                for idx, row in enumerate(selected_rows, start=1):
+                    payload = {
+                        "title": str(row.get("title", "")).strip(),
+                        "year": int(row.get("year") or 0),
+                        "rating": float(row.get("rating") or 0.0),
+                        "file_path": str(row.get("path", "")).strip(),
+                        "language": str(row.get("language", "")).strip(),
+                        "plot": str(row.get("plot", "")).strip(),
+                        "analysed_at": datetime.now().isoformat(),
+                    }
+
+                    if not payload["title"]:
+                        err_count += 1
+                        error_messages.append(f"Zeile {idx}: Titel fehlt")
+                        result_rows.append({"title": "", "year": payload["year"], "status": "error", "detail": "Titel fehlt"})
+                        progress.progress(idx / len(selected_rows))
+                        continue
+
+                    try:
+                        resp = _post_movie(moviedb_url, moviedb_key, payload)
+                        if resp.status_code in (200, 201):
+                            ok_count += 1
+                            result_rows.append(
+                                {
+                                    "title": payload["title"],
+                                    "year": payload["year"],
+                                    "status": "ok",
+                                    "detail": "importiert",
+                                }
+                            )
+                        else:
+                            err_count += 1
+                            detail = f"API {resp.status_code}: {resp.text[:180]}"
+                            error_messages.append(f"{payload['title']}: {detail}")
+                            result_rows.append(
+                                {
+                                    "title": payload["title"],
+                                    "year": payload["year"],
+                                    "status": "error",
+                                    "detail": detail,
+                                }
+                            )
+                    except Exception as exc:
+                        err_count += 1
+                        error_messages.append(f"{payload['title']}: {exc}")
+                        result_rows.append(
+                            {
+                                "title": payload["title"],
+                                "year": payload["year"],
+                                "status": "error",
+                                "detail": str(exc),
+                            }
+                        )
+
+                    progress.progress(idx / len(selected_rows))
+
+                st.session_state.import_last_results = result_rows
+
+                if ok_count:
+                    st.success(f"✅ {ok_count} Einträge importiert.")
+                if err_count:
+                    st.error(f"❌ {err_count} Einträge fehlgeschlagen.")
+                    st.text_area("Fehlerdetails", "\n".join(error_messages), height=120)
+
+    if st.session_state.import_last_results:
+        st.markdown("### 📄 Letzter Import-Report")
+        st.dataframe(st.session_state.import_last_results, use_container_width=True, hide_index=True)
 
 # Footer
 st.divider()
