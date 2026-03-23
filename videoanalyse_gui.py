@@ -75,6 +75,13 @@ def _post_photo(moviedb_url: str, api_key: str, payload: dict):
         headers["Authorization"] = f"Bearer {api_key}"
     return requests.post(url, headers=headers, json=payload, timeout=20)
 
+
+def _get_current_page() -> str:
+    page = st.query_params.get("page", "analyse")
+    if page not in {"analyse", "import"}:
+        page = "analyse"
+    return page
+
 # Page config
 st.set_page_config(
     page_title="Videoanalyse EMB",
@@ -178,9 +185,25 @@ with st.sidebar:
         emby_url = ""
         emby_api_key = ""
 
-tab_analyse, tab_import = st.tabs(["📊 Analyse", "🗂️ Import (Seite 2)"])
+current_page = _get_current_page()
+page_labels = {
+    "analyse": "📊 Analyse",
+    "import": "🗂️ Import (Seite 2)",
+}
+selected_page_label = st.radio(
+    "Navigation",
+    list(page_labels.values()),
+    index=0 if current_page == "analyse" else 1,
+    horizontal=True,
+)
+selected_page = next(key for key, value in page_labels.items() if value == selected_page_label)
+if selected_page != current_page:
+    st.query_params["page"] = selected_page
+    current_page = selected_page
 
-with tab_analyse:
+st.caption("Direktlink zur zweiten Seite: http://localhost:8501/?page=import")
+
+if current_page == "analyse":
     col1, col2 = st.columns([2, 1])
 
     with col1:
@@ -315,10 +338,11 @@ with tab_analyse:
         """)
 
         st.subheader("🔗 Schnelllinks")
+        st.markdown("[Zur Import-Seite wechseln](?page=import)")
         if st.button("🔄 Seite aktualisieren"):
             st.rerun()
 
-with tab_import:
+if current_page == "import":
     st.subheader("🗂️ MoviemetaDb Import")
     st.caption("Manuelle Eingabe oder Verzeichnis durchsuchen und importieren")
 
@@ -528,7 +552,6 @@ with tab_import:
         st.markdown("### 📄 Letzter Import-Report (Videos)")
         st.dataframe(st.session_state.import_last_results, use_container_width=True, hide_index=True)
 
-    # ── Foto-Import ───────────────────────────────────────────────────────────
     st.divider()
     st.markdown("### 📷 Fotos importieren")
     st.caption("Bilddateien aus einem Verzeichnis scannen und in MoviemetaDb importieren")
