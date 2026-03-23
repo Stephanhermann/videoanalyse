@@ -32,6 +32,6 @@ cd "$MOVIEMETA_DIR"
 # Ensure required runtime dependencies are available.
 "$VIDEO_ENV" -m pip install -q fastapi "uvicorn[standard]" sqlalchemy
 
-echo "Starting MoviemetaDb API on http://127.0.0.1:8000"
+echo "Starting MoviemetaDb API on http://127.0.0.1:8001"
 export PYTHONPATH="$MOVIEMETA_DIR:${PYTHONPATH:-}"
-exec "$VIDEO_ENV" -m uvicorn moviemetadb.web:app --host 127.0.0.1 --port 8000
+exec "$VIDEO_ENV" -m uvicorn moviemetadb.web:app --host 127.0.0.1 --port 8001
