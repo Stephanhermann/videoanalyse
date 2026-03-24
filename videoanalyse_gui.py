@@ -128,6 +128,70 @@ def _get_current_page() -> str:
         page = "analyse"
     return page
 
+
+def _expected_summary_paths(mode: str, input_path: str, output_path: str):
+    input_p = Path(input_path)
+    if mode == "📹 Einzelvideo":
+        if output_path:
+            out_dir = Path(output_path)
+        else:
+            out_dir = input_p.parent / "output" / input_p.stem
+        return [out_dir / "minicpm_v_analysis.json"]
+
+    if output_path:
+        batch_root = Path(output_path)
+    else:
+        batch_root = input_p / "output"
+
+    summary_paths = []
+    for video in _scan_video_files(str(input_p), recursive=True):
+        summary_paths.append(batch_root / video.stem / "minicpm_v_analysis.json")
+
+    # remove duplicates (same stem in different folders can still collide)
+    unique = []
+    seen = set()
+    for p in summary_paths:
+        s = str(p)
+        if s not in seen:
+            seen.add(s)
+            unique.append(p)
+    return unique
+
+
+def _build_analysis_summary(mode: str, input_path: str, output_path: str):
+    rows = []
+    for summary_path in _expected_summary_paths(mode, input_path, output_path):
+        if not summary_path.exists():
+            continue
+        try:
+            with summary_path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            continue
+
+        video_info = data.get("video_info", {}) or {}
+        moviepy_info = data.get("moviepy_info", {}) or {}
+        whisper = data.get("whisper", {}) or {}
+        frame_info = data.get("frame_info", {}) or {}
+
+        input_video = data.get("input_video", "")
+        duration_seconds = float(moviepy_info.get("duration") or video_info.get("duration_seconds") or 0.0)
+
+        rows.append(
+            {
+                "video": Path(input_video).name if input_video else summary_path.parent.name,
+                "status": data.get("status", ""),
+                "dauer_min": round(duration_seconds / 60.0, 1) if duration_seconds else 0.0,
+                "sprache": whisper.get("language", ""),
+                "frames": int(frame_info.get("saved_frames") or 0),
+                "nfo": "ja" if data.get("nfo_path") else "nein",
+                "fertig_am": (data.get("finished_at") or "")[:19],
+                "fehler": data.get("error", ""),
+            }
+        )
+
+    return rows
+
 # Page config
 st.set_page_config(
     page_title="Videoanalyse EMB",
@@ -184,6 +248,8 @@ if "analysis_running" not in st.session_state:
     st.session_state.analysis_running = False
 if "log_output" not in st.session_state:
     st.session_state.log_output = ""
+if "analysis_summary_rows" not in st.session_state:
+    st.session_state.analysis_summary_rows = []
 if "import_candidates" not in st.session_state:
     st.session_state.import_candidates = []
 if "import_preview_rows" not in st.session_state:
@@ -263,6 +329,7 @@ if current_page == "analyse":
             else:
                 st.session_state.analysis_running = True
                 st.session_state.log_output = ""
+                st.session_state.analysis_summary_rows = []
 
                 # Build command
                 cmd = [
@@ -337,6 +404,7 @@ if current_page == "analyse":
 
                     if process.returncode == 0:
                         st.session_state.analysis_running = False
+                        st.session_state.analysis_summary_rows = _build_analysis_summary(mode, input_path, output_path)
                         status_text.success("✅ Erfolgreich abgeschlossen!")
                         progress_bar.progress(1.0)
                     else:
@@ -360,6 +428,14 @@ if current_page == "analyse":
             )
         else:
             log_display.info("Kein Log verfügbar. Starten Sie eine Analyse.")
+
+        if st.session_state.analysis_summary_rows:
+            rows = st.session_state.analysis_summary_rows
+            ok_count = sum(1 for r in rows if r.get("status") == "completed")
+            err_count = sum(1 for r in rows if r.get("status") == "error")
+            st.subheader("✅ Zusammenfassung")
+            st.caption(f"Analysierte Videos: {len(rows)} | Erfolgreich: {ok_count} | Fehler: {err_count}")
+            st.dataframe(rows, use_container_width=True, hide_index=True)
 
     with col2:
         st.subheader("ℹ️ Info")
